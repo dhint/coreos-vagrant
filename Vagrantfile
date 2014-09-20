@@ -5,7 +5,7 @@ require 'fileutils'
 
 Vagrant.require_version ">= 1.6.0"
 
-CLOUD_CONFIG_PATH = File.join(File.dirname(__FILE__), "user-data")
+CLOUD_CONFIG_PATH = File.join(File.dirname(__FILE__), "contrib", "coreos", "user-data")
 CONFIG = File.join(File.dirname(__FILE__), "config.rb")
 
 # Defaults for config options defined in CONFIG
@@ -20,19 +20,43 @@ $vb_cpus = 1
 # $num_instances while allowing config.rb to override it
 if ENV["NUM_INSTANCES"].to_i > 0 && ENV["NUM_INSTANCES"]
   $num_instances = ENV["NUM_INSTANCES"].to_i
+elsif ENV["DEIS_NUM_INSTANCES"].to_i > 0 && ENV["DEIS_NUM_INSTANCES"]
+  $num_instances = ENV["DEIS_NUM_INSTANCES"].to_i
+else
+  $num_instances = 3
 end
+
+# VM sizing for Deis
+if $num_instances == 1
+  $vb_memory = 4096
+  $vb_cpus = 2
+else
+  $vb_memory = 2048
+  $vb_cpus = 1
+end
+
+COREOS_VERSION = "444.0.0"
 
 if File.exist?(CONFIG)
   require CONFIG
 end
 
 Vagrant.configure("2") do |config|
-  config.vm.box = "coreos-%s" % $update_channel
-  config.vm.box_version = ">= 308.0.1"
-  config.vm.box_url = "http://%s.release.core-os.net/amd64-usr/current/coreos_production_vagrant.json" % $update_channel
+  # config.vm.box = "coreos-%s" % $update_channel
+  # config.vm.box_version = ">= 308.0.1"
+  # config.vm.box_url = "http://%s.release.core-os.net/amd64-usr/current/coreos_production_vagrant.json" % $update_channel
+  config.vm.box = "coreos-#{COREOS_VERSION}"
+  config.vm.box_url = "http://storage.core-os.net/coreos/amd64-usr/#{COREOS_VERSION}/coreos_production_vagrant.box"
 
   config.vm.provider :vmware_fusion do |vb, override|
-    override.vm.box_url = "http://%s.release.core-os.net/amd64-usr/current/coreos_production_vagrant_vmware_fusion.json" % $update_channel
+    # override.vm.box_url = "http://%s.release.core-os.net/amd64-usr/current/coreos_production_vagrant_vmware_fusion.json" % $update_channel
+    override.vm.box_url = "http://storage.core-os.net/coreos/amd64-usr/#{COREOS_VERSION}/coreos_production_vagrant_vmware_fusion.box"
+  end
+
+  config.vm.provider :virtualbox do |vb, override|
+    # Use AMD Lance nic which seems less problematic than Intel
+    vb.customize ["modifyvm", :id, "--nictype1", "Am79C973"]
+    vb.customize ["modifyvm", :id, "--nictype2", "Am79C973"]
   end
 
   config.vm.provider :virtualbox do |v|
@@ -48,7 +72,7 @@ Vagrant.configure("2") do |config|
   end
 
   (1..$num_instances).each do |i|
-    config.vm.define vm_name = "core-%02d" % i do |config|
+    config.vm.define vm_name = "deis-%d" % i do |config|
       config.vm.hostname = vm_name
 
       if $enable_serial_logging
@@ -85,7 +109,7 @@ Vagrant.configure("2") do |config|
         vb.cpus = $vb_cpus
       end
 
-      ip = "172.17.8.#{i+100}"
+      ip = "172.17.8.#{i+99}"
       config.vm.network :private_network, ip: ip
 
       # Uncomment below to enable NFS for sharing the host machine into the coreos-vagrant VM.
@@ -93,6 +117,11 @@ Vagrant.configure("2") do |config|
 
       if File.exist?(CLOUD_CONFIG_PATH)
         config.vm.provision :file, :source => "#{CLOUD_CONFIG_PATH}", :destination => "/tmp/vagrantfile-user-data"
+        # check that the CoreOS user-data file is valid
+        config.vm.provision :shell do |s|
+          s.path = File.join(File.dirname(__FILE__), "contrib", "util", "check-user-data.sh")
+          s.args = ["/tmp/vagrantfile-user-data", $num_instances]
+        end
         config.vm.provision :shell, :inline => "mv /tmp/vagrantfile-user-data /var/lib/coreos-vagrant/", :privileged => true
       end
 
